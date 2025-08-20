@@ -11,6 +11,7 @@ warnings.filterwarnings('ignore')
 # import snowflake.cortex as cortex
 # import logger
 import re
+import os
 
 # List of available semantic model paths in the format: <DATABASE>.<SCHEMA>.<STAGE>/<FILE-NAME>
 # Each path points to a YAML file defining a semantic model
@@ -1446,4 +1447,5 @@ def display_suggested_questions():
        
 
 if __name__ == "__main__":
+
     main()
