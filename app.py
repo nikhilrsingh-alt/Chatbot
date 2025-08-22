@@ -342,18 +342,25 @@ def process_user_input(prompt: str):
             # time.sleep(1)
             
             # Pass the entire conversation history (including previous messages) to the API
-            try:
-                response, error_msg = get_analyst_response(st.session_state.messages)
-            except:
-                response = {"content":"Something went Wrong!","request_id":"NO ID"}
-                error_msg = "Error - Something went wrong!"
 
-            # st.write(response)
+            validated_messages = validate_message_sequence(st.session_state.messages)
+            filtered_messages = []
+            for d in validated_messages:
+                filtered_d = {k: v for k, v in d.items() if k not in ["summary_insights","judge_result","llm_insights","result_df","insights_enabled"]}
+                filtered_messages.append(filtered_d)
+            print("filtered_messages",filtered_messages)
+            result= session.call("kipi_poc_db.kipi_poc_stg.get_analyst_response", filtered_messages)
+            if isinstance(result, str):
+                result = json.loads(result)
+
+            response = result.get("parsed_content")
+            error_msg = result.get("error_msg")
+                
             
             if error_msg is None:
                 analyst_message = {
                     "role": "analyst",
-                    "content": response["content"],
+                    "content": response["message"]["content"],
                     "request_id": response["request_id"],
                 }
             else:
@@ -373,74 +380,89 @@ def process_user_input(prompt: str):
                     get_and_display_smart_followup_suggestions()
     st.rerun()
 
-
-def get_analyst_response(messages: List[Dict]) -> Tuple[Dict, Optional[str]]:
+## to validate the message sequence before sending it to the API:
+def validate_message_sequence(messages):
     """
-    Send chat history to the Cortex Analyst API and return the response.
-
-    Args:
-        messages (List[Dict]): The conversation history.
-
-    Returns:
-        Optional[Dict]: The response from the Cortex Analyst API.
+    Ensures that the message sequence alternates between 'user' and 'analyst' roles.
+    Returns a cleaned version of the messages.
     """
-    # Prepare the request body with the user's prompt and full conversation history
-    # -> Only process the latest question which doesnt have the result df saved.
-    filtered_messages = [{k: v for k,v in d.items() if k not in ["summary_insights","judge_result","llm_insights","result_df","insights_enabled"]} for d in messages]
-    request_body = {
-        "messages": filtered_messages,  # Pass the entire conversation history here
-        "semantic_model_file": f"@{st.session_state.selected_semantic_model_path}",
-    }
-
-    # Send a POST request to the Cortex Analyst API endpoint
-    # Adjusted to use positional arguments as per the API's requirement
-    # resp = _snowflake.send_snow_api_request(
-    #     "POST",  # method
-    #     API_ENDPOINT,  # path
-    #     {},  # headers
-    #     {},  # params
-    #     request_body,  # body
-    #     None,  # request_guid
-    #     API_TIMEOUT,  # timeout in milliseconds
-    # )
-
-    analyst_response = session.sql(f"CALL ANALYST_CALL(PARSE_JSON('''{json.dumps(request_body)}'''))").collect()
-    analyst_response = json.loads(analyst_response[0]["ANALYST_CALL"]) 
-    print("ANALYSTREPONSE: ",analyst_response)
-
-    resp = analyst_response["message"]
-    print("resp: ",resp)
-
-    status = 400
-    # Content is a string with serialized JSON object
-    try:
-        parsed_content = resp
-        status = 200
-        parsed_content["request_id"] = analyst_response['request_id']
-    except:
-        status = 400
-
-    # Check if the response is successful
-    if status < 400:
-        # Return the content of the response as a JSON object
-        return parsed_content, None
-    else:
-        st.session_state.content['resp'] = resp
-        st.session_state.content['parsed_content'] = resp
+    if not messages:
+        return []
+    
+    validated_messages = [messages[0]]  # Start with the first message
+    
+    for i in range(1, len(messages)):
+        current_message = messages[i]
+        prev_message = validated_messages[-1]
         
-        # Craft readable error message
-        error_msg = f"""
-🚨 An Analyst API error has occurred 🚨
+        # If the current message has the same role as the previous one, skip it
+        if current_message["role"] == prev_message["role"]:
+            continue
+        
+        validated_messages.append(current_message)
+    
+    # Ensure the last message is from the user before sending to API
+    if validated_messages and validated_messages[-1]["role"] != "user":
+        validated_messages = validated_messages[:-1]
+    
+    return validated_messages
+# def get_analyst_response(messages: List[Dict]) -> Tuple[Dict, Optional[str]]:
+#     """
+#     Send chat history to the Cortex Analyst API and return the response.
 
-* response code: `{status}`
-* request-id: `{analyst_response['request_id']}`
-* error code: `ERROR`
+#     Args:
+#         messages (List[Dict]): The conversation history.
 
-Message:
+#     Returns:
+#         Optional[Dict]: The response from the Cortex Analyst API.
+#     """
+#     # Prepare the request body with the user's prompt and full conversation history
+#     # -> Only process the latest question which doesnt have the result df saved.
+#     filtered_messages = [{k: v for k,v in d.items() if k not in ["summary_insights","judge_result","llm_insights","result_df","insights_enabled"]} for d in messages]
+#     request_body = {
+#         "messages": filtered_messages,  # Pass the entire conversation history here
+#         "semantic_model_file": f"@{st.session_state.selected_semantic_model_path}",
+#     }
 
-        """
-        # st.write(parsed_content)
-        return parsed_content, error_msg
+#     # Send a POST request to the Cortex Analyst API endpoint
+#     # Adjusted to use positional arguments as per the API's requirement
+#     # resp = _snowflake.send_snow_api_request(
+#     #     "POST",  # method
+#     #     API_ENDPOINT,  # path
+#     #     {},  # headers
+#     #     {},  # params
+#     #     request_body,  # body
+#     #     None,  # request_guid
+#     #     API_TIMEOUT,  # timeout in milliseconds
+#     # )
+
+#     resp = session.sql(f"CALL ANALYST_CALL3({request_body})").to_pandas()
+#     resp = json.loads(resp['ANALYST_CALL3'][0])
+
+#     # Content is a string with serialized JSON object
+#     parsed_content = resp["content"]
+
+#     # Check if the response is successful
+#     if resp["status"] < 400:
+#         # Return the content of the response as a JSON object
+#         return parsed_content, None
+#     else:
+#         st.session_state.content['resp'] = resp
+#         st.session_state.content['parsed_content'] = resp
+        
+#         # Craft readable error message
+#         error_msg = f"""
+# 🚨 An Analyst API error has occurred 🚨
+
+# * response code: `{resp['status']}`
+# * request-id: `{parsed_content['request_id']}`
+# * error code: `{parsed_content['error_code']}`
+
+# Message:
+
+#         """
+#         # st.write(parsed_content)
+#         return parsed_content, error_msg
 
 ### Set of functions to display suggestions for follow up questions
 
@@ -1447,5 +1469,4 @@ def display_suggested_questions():
        
 
 if __name__ == "__main__":
-
     main()
